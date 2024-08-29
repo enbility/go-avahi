@@ -1,4 +1,4 @@
-module github.com/holoplot/go-avahi
+module github.com/enbility/go-avahi
 
 go 1.17
 
