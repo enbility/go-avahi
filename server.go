@@ -31,11 +31,7 @@ type Server struct {
 //   - retryUntilConnect: if true, the server will retry to connect to DBus and Avahi if they are not available at the start
 //   - closeCB: is invoked when either DBus or Avahi disconnects
 func ServerNew() ServerInterface {
-	return &Server{
-		signalChannel:  make(chan *dbus.Signal, 10),
-		quitChannel:    make(chan struct{}),
-		signalEmitters: make(map[dbus.ObjectPath]SignalEmitter),
-	}
+	return &Server{}
 }
 
 var _ ServerInterface = (*Server)(nil)
@@ -46,6 +42,9 @@ func (c *Server) Setup(eventCB EventCB) error {
 		return err
 	}
 
+	c.signalChannel = make(chan *dbus.Signal, 10)
+	c.quitChannel = make(chan struct{})
+	c.signalEmitters = make(map[dbus.ObjectPath]SignalEmitter)
 	c.conn = conn
 	c.eventCB = eventCB
 
