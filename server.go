@@ -14,8 +14,6 @@ const (
 	Disconnected = 0
 )
 
-type eventCB func(event Event)
-
 // A Server is the cental object of an Avahi connection
 type Server struct {
 	conn          *dbus.Conn
@@ -23,30 +21,35 @@ type Server struct {
 	signalChannel chan *dbus.Signal
 	quitChannel   chan struct{}
 
-	eventCB eventCB
+	eventCB EventCB
 
 	mutex          sync.Mutex
-	signalEmitters map[dbus.ObjectPath]signalEmitter
+	signalEmitters map[dbus.ObjectPath]SignalEmitter
 }
 
 // ServerNew returns a new Server object
 //   - retryUntilConnect: if true, the server will retry to connect to DBus and Avahi if they are not available at the start
 //   - closeCB: is invoked when either DBus or Avahi disconnects
-func ServerNew(eventCB eventCB) (*Server, error) {
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		return nil, err
-	}
-
-	c := &Server{
-		eventCB:        eventCB,
-		conn:           conn,
+func ServerNew() ServerInterface {
+	return &Server{
 		signalChannel:  make(chan *dbus.Signal, 10),
 		quitChannel:    make(chan struct{}),
-		signalEmitters: make(map[dbus.ObjectPath]signalEmitter),
+		signalEmitters: make(map[dbus.ObjectPath]SignalEmitter),
+	}
+}
+
+var _ ServerInterface = (*Server)(nil)
+
+func (c *Server) Setup(eventCB EventCB) error {
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		return err
 	}
 
-	return c, nil
+	c.conn = conn
+	c.eventCB = eventCB
+
+	return nil
 }
 
 // Start the server
@@ -109,7 +112,7 @@ func (c *Server) handleSignals() {
 				c.mutex.Lock()
 				for path, obj := range c.signalEmitters {
 					if path == signal.Path {
-						_ = obj.dispatchSignal(signal)
+						_ = obj.DispatchSignal(signal)
 					}
 				}
 				c.mutex.Unlock()
@@ -126,7 +129,7 @@ func (c *Server) shutdown() {
 	defer c.mutex.Unlock()
 
 	for path, obj := range c.signalEmitters {
-		obj.free()
+		obj.Free()
 		delete(c.signalEmitters, path)
 	}
 
@@ -156,7 +159,7 @@ func (c *Server) interfaceForMember(method string) string {
 }
 
 // EntryGroupNew returns a new and empty EntryGroup
-func (c *Server) EntryGroupNew() (*EntryGroup, error) {
+func (c *Server) EntryGroupNew() (EntryGroupInterface, error) {
 	var o dbus.ObjectPath
 
 	c.mutex.Lock()
@@ -178,7 +181,7 @@ func (c *Server) EntryGroupNew() (*EntryGroup, error) {
 }
 
 // EntryGroupFree frees an entry group and releases its resources on the service
-func (c *Server) EntryGroupFree(r *EntryGroup) {
+func (c *Server) EntryGroupFree(r EntryGroupInterface) {
 	c.signalEmitterFree(r)
 }
 
@@ -205,7 +208,7 @@ func (c *Server) ResolveService(iface, protocol int32, name, serviceType, domain
 }
 
 // DomainBrowserNew ...
-func (c *Server) DomainBrowserNew(iface, protocol int32, domain string, btype int32, flags uint32) (*DomainBrowser, error) {
+func (c *Server) DomainBrowserNew(iface, protocol int32, domain string, btype int32, flags uint32) (DomainBrowserInterface, error) {
 	var o dbus.ObjectPath
 
 	err := c.object.Call(c.interfaceForMember("DomainBrowserNew"), 0, iface, protocol, domain, btype, flags).Store(&o)
@@ -222,12 +225,12 @@ func (c *Server) DomainBrowserNew(iface, protocol int32, domain string, btype in
 }
 
 // DomainBrowserFree ...
-func (c *Server) DomainBrowserFree(r *DomainBrowser) {
+func (c *Server) DomainBrowserFree(r DomainBrowserInterface) {
 	c.signalEmitterFree(r)
 }
 
 // ServiceTypeBrowserNew ...
-func (c *Server) ServiceTypeBrowserNew(iface, protocol int32, domain string, flags uint32) (*ServiceTypeBrowser, error) {
+func (c *Server) ServiceTypeBrowserNew(iface, protocol int32, domain string, flags uint32) (ServiceTypeBrowserInterface, error) {
 	var o dbus.ObjectPath
 
 	c.mutex.Lock()
@@ -249,12 +252,12 @@ func (c *Server) ServiceTypeBrowserNew(iface, protocol int32, domain string, fla
 }
 
 // ServiceTypeBrowserFree ...
-func (c *Server) ServiceTypeBrowserFree(r *ServiceTypeBrowser) {
+func (c *Server) ServiceTypeBrowserFree(r ServiceTypeBrowserInterface) {
 	c.signalEmitterFree(r)
 }
 
 // ServiceBrowserNew ...
-func (c *Server) ServiceBrowserNew(iface, protocol int32, serviceType string, domain string, flags uint32) (*ServiceBrowser, error) {
+func (c *Server) ServiceBrowserNew(addChan, removeChan chan Service, iface, protocol int32, serviceType string, domain string, flags uint32) (ServiceBrowserInterface, error) {
 	var o dbus.ObjectPath
 
 	c.mutex.Lock()
@@ -265,7 +268,7 @@ func (c *Server) ServiceBrowserNew(iface, protocol int32, serviceType string, do
 		return nil, err
 	}
 
-	r, err := ServiceBrowserNew(c.conn, o)
+	r, err := ServiceBrowserNew(addChan, removeChan, c.conn, o)
 	if err != nil {
 		return nil, err
 	}
@@ -276,12 +279,12 @@ func (c *Server) ServiceBrowserNew(iface, protocol int32, serviceType string, do
 }
 
 // ServiceBrowserFree ...
-func (c *Server) ServiceBrowserFree(r *ServiceBrowser) {
+func (c *Server) ServiceBrowserFree(r ServiceBrowserInterface) {
 	c.signalEmitterFree(r)
 }
 
 // ServiceResolverNew ...
-func (c *Server) ServiceResolverNew(iface, protocol int32, name, serviceType, domain string, aprotocol int32, flags uint32) (*ServiceResolver, error) {
+func (c *Server) ServiceResolverNew(iface, protocol int32, name, serviceType, domain string, aprotocol int32, flags uint32) (ServiceResolverInterface, error) {
 	var o dbus.ObjectPath
 
 	c.mutex.Lock()
@@ -303,12 +306,12 @@ func (c *Server) ServiceResolverNew(iface, protocol int32, name, serviceType, do
 }
 
 // ServiceResolverFree ...
-func (c *Server) ServiceResolverFree(r *ServiceResolver) {
+func (c *Server) ServiceResolverFree(r ServiceResolverInterface) {
 	c.signalEmitterFree(r)
 }
 
 // HostNameResolverNew ...
-func (c *Server) HostNameResolverNew(iface, protocol int32, name string, aprotocol int32, flags uint32) (*HostNameResolver, error) {
+func (c *Server) HostNameResolverNew(iface, protocol int32, name string, aprotocol int32, flags uint32) (HostNameResolverInterface, error) {
 	var o dbus.ObjectPath
 
 	c.mutex.Lock()
@@ -330,7 +333,7 @@ func (c *Server) HostNameResolverNew(iface, protocol int32, name string, aprotoc
 }
 
 // AddressResolverNew ...
-func (c *Server) AddressResolverNew(iface, protocol int32, address string, flags uint32) (*AddressResolver, error) {
+func (c *Server) AddressResolverNew(iface, protocol int32, address string, flags uint32) (AddressResolverInterface, error) {
 	var o dbus.ObjectPath
 
 	c.mutex.Lock()
@@ -352,12 +355,12 @@ func (c *Server) AddressResolverNew(iface, protocol int32, address string, flags
 }
 
 // AddressResolverFree ...
-func (c *Server) AddressResolverFree(r *AddressResolver) {
+func (c *Server) AddressResolverFree(r AddressResolverInterface) {
 	c.signalEmitterFree(r)
 }
 
 // RecordBrowserNew ...
-func (c *Server) RecordBrowserNew(iface, protocol int32, name string, class uint16, recordType uint16, flags uint32) (*RecordBrowser, error) {
+func (c *Server) RecordBrowserNew(iface, protocol int32, name string, class uint16, recordType uint16, flags uint32) (RecordBrowserInterface, error) {
 	var o dbus.ObjectPath
 
 	c.mutex.Lock()
@@ -379,7 +382,7 @@ func (c *Server) RecordBrowserNew(iface, protocol int32, name string, class uint
 }
 
 // RecordBrowserFree ...
-func (c *Server) RecordBrowserFree(r *RecordBrowser) {
+func (c *Server) RecordBrowserFree(r RecordBrowserInterface) {
 	c.signalEmitterFree(r)
 }
 

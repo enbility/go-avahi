@@ -1,15 +1,7 @@
 package avahi
 
-import dbus "github.com/godbus/dbus/v5"
-
-type signalEmitter interface {
-	dispatchSignal(signal *dbus.Signal) error
-	getObjectPath() dbus.ObjectPath
-	free()
-}
-
-func (c *Server) signalEmitterFree(e signalEmitter) {
-	o := e.getObjectPath()
+func (c *Server) signalEmitterFree(e SignalEmitter) {
+	o := e.GetObjectPath()
 
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
@@ -19,5 +11,5 @@ func (c *Server) signalEmitterFree(e signalEmitter) {
 		delete(c.signalEmitters, o)
 	}
 
-	e.free()
+	e.Free()
 }

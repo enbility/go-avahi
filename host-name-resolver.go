@@ -9,37 +9,43 @@ import (
 // A HostNameResolver can resolve host names
 type HostNameResolver struct {
 	object       dbus.BusObject
-	FoundChannel chan HostName
+	foundChannel chan HostName
 	closeCh      chan struct{}
 }
 
 // HostNameResolverNew returns a new HostNameResolver
-func HostNameResolverNew(conn *dbus.Conn, path dbus.ObjectPath) (*HostNameResolver, error) {
+func HostNameResolverNew(conn *dbus.Conn, path dbus.ObjectPath) (HostNameResolverInterface, error) {
 	c := new(HostNameResolver)
 
 	c.object = conn.Object("org.freedesktop.Avahi", path)
-	c.FoundChannel = make(chan HostName)
+	c.foundChannel = make(chan HostName)
 	c.closeCh = make(chan struct{})
 
 	return c, nil
+}
+
+var _ HostNameResolverInterface = (*HostNameResolver)(nil)
+
+func (c *HostNameResolver) FoundChannel() chan HostName {
+	return c.foundChannel
 }
 
 func (c *HostNameResolver) interfaceForMember(method string) string {
 	return fmt.Sprintf("%s.%s", "org.freedesktop.Avahi.HostNameResolver", method)
 }
 
-func (c *HostNameResolver) free() {
+func (c *HostNameResolver) Free() {
 	if c.closeCh != nil {
 		close(c.closeCh)
 	}
 	c.object.Call(c.interfaceForMember("Free"), 0)
 }
 
-func (c *HostNameResolver) getObjectPath() dbus.ObjectPath {
+func (c *HostNameResolver) GetObjectPath() dbus.ObjectPath {
 	return c.object.Path()
 }
 
-func (c *HostNameResolver) dispatchSignal(signal *dbus.Signal) error {
+func (c *HostNameResolver) DispatchSignal(signal *dbus.Signal) error {
 	if signal.Name == c.interfaceForMember("Found") {
 		var hostName HostName
 		err := dbus.Store(signal.Body, &hostName.Interface, &hostName.Protocol,
@@ -50,9 +56,9 @@ func (c *HostNameResolver) dispatchSignal(signal *dbus.Signal) error {
 		}
 
 		select {
-		case c.FoundChannel <- hostName:
+		case c.foundChannel <- hostName:
 		case <-c.closeCh:
-			close(c.FoundChannel)
+			close(c.foundChannel)
 			c.closeCh = nil
 		}
 	}

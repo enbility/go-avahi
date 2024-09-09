@@ -9,37 +9,43 @@ import (
 // A ServiceResolver resolves mDNS services to IP addresses
 type ServiceResolver struct {
 	object       dbus.BusObject
-	FoundChannel chan Service
+	foundChannel chan Service
 	closeCh      chan struct{}
 }
 
 // ServiceResolverNew returns a new mDNS service resolver
-func ServiceResolverNew(conn *dbus.Conn, path dbus.ObjectPath) (*ServiceResolver, error) {
+func ServiceResolverNew(conn *dbus.Conn, path dbus.ObjectPath) (ServiceResolverInterface, error) {
 	c := new(ServiceResolver)
 
 	c.object = conn.Object("org.freedesktop.Avahi", path)
-	c.FoundChannel = make(chan Service)
+	c.foundChannel = make(chan Service)
 	c.closeCh = make(chan struct{})
 
 	return c, nil
+}
+
+var _ ServiceResolverInterface = (*ServiceResolver)(nil)
+
+func (c *ServiceResolver) FoundChannel() chan Service {
+	return c.foundChannel
 }
 
 func (c *ServiceResolver) interfaceForMember(method string) string {
 	return fmt.Sprintf("%s.%s", "org.freedesktop.Avahi.ServiceResolver", method)
 }
 
-func (c *ServiceResolver) free() {
+func (c *ServiceResolver) Free() {
 	if c.closeCh != nil {
 		close(c.closeCh)
 	}
 	c.object.Call(c.interfaceForMember("Free"), 0)
 }
 
-func (c *ServiceResolver) getObjectPath() dbus.ObjectPath {
+func (c *ServiceResolver) GetObjectPath() dbus.ObjectPath {
 	return c.object.Path()
 }
 
-func (c *ServiceResolver) dispatchSignal(signal *dbus.Signal) error {
+func (c *ServiceResolver) DispatchSignal(signal *dbus.Signal) error {
 	if signal.Name == c.interfaceForMember("Found") {
 		var service Service
 		err := dbus.Store(signal.Body, &service.Interface, &service.Protocol,
@@ -51,9 +57,9 @@ func (c *ServiceResolver) dispatchSignal(signal *dbus.Signal) error {
 		}
 
 		select {
-		case c.FoundChannel <- service:
+		case c.foundChannel <- service:
 		case <-c.closeCh:
-			close(c.FoundChannel)
+			close(c.foundChannel)
 			c.closeCh = nil
 		}
 	}

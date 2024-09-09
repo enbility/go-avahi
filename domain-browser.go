@@ -28,7 +28,7 @@ const (
 )
 
 // DomainBrowserNew returns a new domain browser
-func DomainBrowserNew(conn *dbus.Conn, path dbus.ObjectPath) (*DomainBrowser, error) {
+func DomainBrowserNew(conn *dbus.Conn, path dbus.ObjectPath) (DomainBrowserInterface, error) {
 	c := new(DomainBrowser)
 
 	c.object = conn.Object("org.freedesktop.Avahi", path)
@@ -39,22 +39,24 @@ func DomainBrowserNew(conn *dbus.Conn, path dbus.ObjectPath) (*DomainBrowser, er
 	return c, nil
 }
 
+var _ DomainBrowserInterface = (*DomainBrowser)(nil)
+
 func (c *DomainBrowser) interfaceForMember(method string) string {
 	return fmt.Sprintf("%s.%s", "org.freedesktop.Avahi.DomainBrowser", method)
 }
 
-func (c *DomainBrowser) free() {
+func (c *DomainBrowser) Free() {
 	if c.closeCh != nil {
 		close(c.closeCh)
 	}
 	c.object.Call(c.interfaceForMember("Free"), 0)
 }
 
-func (c *DomainBrowser) getObjectPath() dbus.ObjectPath {
+func (c *DomainBrowser) GetObjectPath() dbus.ObjectPath {
 	return c.object.Path()
 }
 
-func (c *DomainBrowser) dispatchSignal(signal *dbus.Signal) error {
+func (c *DomainBrowser) DispatchSignal(signal *dbus.Signal) error {
 	if signal.Name == c.interfaceForMember("ItemNew") || signal.Name == c.interfaceForMember("ItemRemove") {
 		var domain Domain
 		err := dbus.Store(signal.Body, &domain.Interface, &domain.Protocol, &domain.Domain, &domain.Flags)

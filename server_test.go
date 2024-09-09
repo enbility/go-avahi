@@ -7,14 +7,16 @@ import (
 
 // TestNew ensures that New() works without errors.
 func TestNew(t *testing.T) {
-	_, err := ServerNew(nil)
+	a := ServerNew()
+	err := a.Setup(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestNewClose(t *testing.T) {
-	a, err := ServerNew(nil)
+	a := ServerNew()
+	err := a.Setup(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +36,8 @@ func TestNewClose(t *testing.T) {
 }
 
 func TestBasic(t *testing.T) {
-	a, err := ServerNew(nil)
+	a := ServerNew()
+	err := a.Setup(nil)
 	if err != nil {
 		t.Fatalf("Avahi new failed: %v", err)
 	}

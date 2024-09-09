@@ -33,7 +33,7 @@ type EntryGroup struct {
 }
 
 // EntryGroupNew creates a new entry group
-func EntryGroupNew(conn *dbus.Conn, path dbus.ObjectPath) (*EntryGroup, error) {
+func EntryGroupNew(conn *dbus.Conn, path dbus.ObjectPath) (EntryGroupInterface, error) {
 	c := new(EntryGroup)
 	c.conn = conn
 	c.object = c.conn.Object("org.freedesktop.Avahi", path)
@@ -41,6 +41,8 @@ func EntryGroupNew(conn *dbus.Conn, path dbus.ObjectPath) (*EntryGroup, error) {
 
 	return c, nil
 }
+
+var _ EntryGroupInterface = (*EntryGroup)(nil)
 
 func (c *EntryGroup) interfaceForMember(method string) string {
 	return fmt.Sprintf("%s.%s", "org.freedesktop.Avahi.EntryGroup", method)
@@ -109,15 +111,15 @@ func (c *EntryGroup) AddRecord(iface, protocol int32, flags uint32, name string,
 	return c.object.Call(c.interfaceForMember("AddRecord"), 0, iface, protocol, flags, name, class, recordType, ttl, rdata).Err
 }
 
-func (c *EntryGroup) free() {
+func (c *EntryGroup) Free() {
 	c.object.Call(c.interfaceForMember("Free"), 0)
 }
 
-func (c *EntryGroup) getObjectPath() dbus.ObjectPath {
+func (c *EntryGroup) GetObjectPath() dbus.ObjectPath {
 	return c.object.Path()
 }
 
-func (c *EntryGroup) dispatchSignal(signal *dbus.Signal) error {
+func (c *EntryGroup) DispatchSignal(signal *dbus.Signal) error {
 	if signal.Name == c.interfaceForMember("StateChanged") {
 		var state EntryGroupState
 		err := dbus.Store(signal.Body, &state.State, &state.Error)
