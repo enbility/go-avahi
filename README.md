@@ -36,13 +36,13 @@ import (
 	"github.com/holoplot/go-avahi"
 )
 
-func main() {
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		log.Fatalf("Cannot get system bus: %v", err)
-	}
+func cb(event Event) {
+	log.Println("Avahi Disconnected")
+	// initiate reconnect
+}
 
-	server, err := avahi.ServerNew(conn)
+func main() {
+	server, err := avahi.ServerNew(cb)
 	if err != nil {
 		log.Fatalf("Avahi new failed: %v", err)
 	}
@@ -140,13 +140,13 @@ import (
 	"github.com/holoplot/go-avahi"
 )
 
-func main() {
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		log.Fatalf("Cannot get system bus: %v", err)
-	}
+func cb(event Event) {
+	log.Println("Avahi Disconnected")
+	// initiate reconnect
+}
 
-	a, err := avahi.ServerNew(conn)
+func main() {
+	a, err := avahi.ServerNew(cb)
 	if err != nil {
 		log.Fatalf("Avahi new failed: %v", err)
 	}

@@ -3,37 +3,26 @@ package avahi
 import (
 	"testing"
 	"time"
-
-	"github.com/godbus/dbus/v5"
 )
 
 // TestNew ensures that New() works without errors.
 func TestNew(t *testing.T) {
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = ServerNew(conn)
+	_, err := ServerNew(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestNewClose(t *testing.T) {
-	conn, err := dbus.SystemBus()
+	a, err := ServerNew(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	a, err := ServerNew(conn)
-	if err != nil {
-		t.Fatal(err)
-	}
+	a.Start()
 
 	doneChannel := make(chan struct{})
 	go func() {
-		a.Close()
+		a.Shutdown()
 		doneChannel <- struct{}{}
 	}()
 
@@ -45,15 +34,11 @@ func TestNewClose(t *testing.T) {
 }
 
 func TestBasic(t *testing.T) {
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	a, err := ServerNew(conn)
+	a, err := ServerNew(nil)
 	if err != nil {
 		t.Fatalf("Avahi new failed: %v", err)
 	}
+	a.Start()
 
 	s, err := a.GetHostName()
 	if err != nil {

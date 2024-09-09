@@ -7,18 +7,14 @@ import (
 	dbus "github.com/godbus/dbus/v5"
 )
 
+type Event uint
+
 const (
-	// ServerInvalid - Invalid state (initial)
-	ServerInvalid = 0
-	// ServerRegistering - Host RRs are being registered
-	ServerRegistering = 1
-	// ServerRunning - All host RRs have been established
-	ServerRunning = 2
-	// ServerCollision - There is a collision with a host RR. All host RRs have been withdrawn, the user should set a new host name via SetHostname()
-	ServerCollision = 3
-	// ServerFailure - Some fatal failure happened, the server is unable to proceed
-	ServerFailure = 4
+	// DBUS or Avahi got disconnected
+	Disconnected = 0
 )
+
+type eventCB func(event Event)
 
 // A Server is the cental object of an Avahi connection
 type Server struct {
@@ -27,31 +23,89 @@ type Server struct {
 	signalChannel chan *dbus.Signal
 	quitChannel   chan struct{}
 
+	eventCB eventCB
+
 	mutex          sync.Mutex
 	signalEmitters map[dbus.ObjectPath]signalEmitter
 }
 
 // ServerNew returns a new Server object
-func ServerNew(conn *dbus.Conn) (*Server, error) {
-	c := new(Server)
-	c.conn = conn
-	c.object = conn.Object("org.freedesktop.Avahi", dbus.ObjectPath("/"))
-	c.signalChannel = make(chan *dbus.Signal, 10)
-	c.quitChannel = make(chan struct{})
+//   - retryUntilConnect: if true, the server will retry to connect to DBus and Avahi if they are not available at the start
+//   - closeCB: is invoked when either DBus or Avahi disconnects
+func ServerNew(eventCB eventCB) (*Server, error) {
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		return nil, err
+	}
 
+	c := &Server{
+		eventCB:        eventCB,
+		conn:           conn,
+		signalChannel:  make(chan *dbus.Signal, 10),
+		quitChannel:    make(chan struct{}),
+		signalEmitters: make(map[dbus.ObjectPath]signalEmitter),
+	}
+
+	return c, nil
+}
+
+// Start the server
+//
+// returns an error if the dbus connection failed
+func (c *Server) Start() {
+	c.object = c.conn.Object("org.freedesktop.Avahi", dbus.ObjectPath("/"))
+	// Get signals for DBus Disconnects
 	c.conn.Signal(c.signalChannel)
+	// Get signals for DBus Disconnects
+	c.conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, "type='signal',interface='org.freedesktop.DBus.Local'")
+	// Get signals for Avahi NameOwnerChanged, for avahi (dis)connects
+	c.conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, "type='signal',interface='org.freedesktop.DBus'")
+	// Get signals for Avahi updates
 	c.conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, "type='signal',interface='org.freedesktop.Avahi'")
 
-	c.signalEmitters = make(map[dbus.ObjectPath]signalEmitter)
+	go c.handleSignals()
+}
 
-	go func() {
-		for {
-			select {
-			case signal, ok := <-c.signalChannel:
-				if !ok {
-					continue
+func (c *Server) handleSignals() {
+	shutdownFunc := func() {
+		c.shutdown()
+	}
+
+	for {
+		select {
+		case signal, ok := <-c.signalChannel:
+			if !ok {
+				continue
+			}
+
+			switch signal.Name {
+			case "org.freedesktop.DBus.Local.Disconnected":
+				// DBus disconneted
+				defer shutdownFunc()
+				return
+
+			case "org.freedesktop.DBus.NameOwnerChanged":
+				if signal.Path != "/org/freedesktop/DBus" {
+					break
 				}
 
+				var name, old, new *string
+
+				if err := dbus.Store(signal.Body, &name, &old, &new); err != nil {
+					break
+				}
+
+				if name == nil || *name != "org.freedesktop.Avahi" {
+					break
+				}
+
+				if old != nil && *old != "" {
+					// Avahi Daemon disconneted
+					defer shutdownFunc()
+					return
+				}
+
+			default:
 				c.mutex.Lock()
 				for path, obj := range c.signalEmitters {
 					if path == signal.Path {
@@ -59,20 +113,15 @@ func ServerNew(conn *dbus.Conn) (*Server, error) {
 					}
 				}
 				c.mutex.Unlock()
-
-			case <-c.quitChannel:
-				return
 			}
-		}
-	}()
 
-	return c, nil
+		case <-c.quitChannel:
+			return
+		}
+	}
 }
 
-// Close closes the connection to a server
-func (c *Server) Close() {
-	c.quitChannel <- struct{}{}
-
+func (c *Server) shutdown() {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -81,7 +130,25 @@ func (c *Server) Close() {
 		delete(c.signalEmitters, path)
 	}
 
-	c.conn.Close()
+	if c.conn != nil {
+		c.conn.Close()
+		c.conn = nil
+
+		if c.eventCB != nil {
+			go c.eventCB(Disconnected)
+		}
+	}
+}
+
+// Close the connection to a dbus server
+func (c *Server) Shutdown() {
+	if c.quitChannel != nil {
+		c.quitChannel <- struct{}{}
+		close(c.quitChannel)
+		c.quitChannel = nil
+	}
+
+	c.shutdown()
 }
 
 func (c *Server) interfaceForMember(method string) string {
