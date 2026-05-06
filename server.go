@@ -119,13 +119,23 @@ func (c *Server) handleSignals() {
 				}
 
 			default:
+				// Snapshot matching emitters under the mutex, then dispatch
+				// WITHOUT holding it. DispatchSignal does a channel send that
+				// can block; holding c.mutex during that send creates a
+				// deadlock cycle with any concurrent caller that holds a.mux
+				// and needs c.mutex (e.g. ServiceBrowserFree, EntryGroupNew).
 				c.mutex.Lock()
+				var toDispatch []SignalEmitter
 				for path, obj := range c.signalEmitters {
 					if path == signal.Path {
-						_ = obj.DispatchSignal(signal)
+						toDispatch = append(toDispatch, obj)
 					}
 				}
 				c.mutex.Unlock()
+
+				for _, obj := range toDispatch {
+					_ = obj.DispatchSignal(signal)
+				}
 			}
 
 		case <-c.quitChannel:

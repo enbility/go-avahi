@@ -2,6 +2,7 @@ package avahi
 
 import (
 	"fmt"
+	"sync"
 
 	dbus "github.com/godbus/dbus/v5"
 )
@@ -9,6 +10,7 @@ import (
 // A ServiceBrowser browses for mDNS services
 type ServiceBrowser struct {
 	object        dbus.BusObject
+	mu            sync.Mutex
 	addChannel    chan Service
 	removeChannel chan Service
 }
@@ -31,6 +33,12 @@ func (c *ServiceBrowser) interfaceForMember(method string) string {
 }
 
 func (c *ServiceBrowser) Free() {
+	// Nil channels before calling D-Bus Free so any concurrent DispatchSignal
+	// (dispatched after the server snapshot) sees nil and skips the send.
+	c.mu.Lock()
+	c.addChannel = nil
+	c.removeChannel = nil
+	c.mu.Unlock()
 	c.object.Call(c.interfaceForMember("Free"), 0)
 }
 
@@ -46,13 +54,28 @@ func (c *ServiceBrowser) DispatchSignal(signal *dbus.Signal) error {
 			return err
 		}
 
+		// Read channel pointers under mu so we see any nil written by Free().
+		c.mu.Lock()
+		addCh := c.addChannel
+		removeCh := c.removeChannel
+		c.mu.Unlock()
+
 		if signal.Name == c.interfaceForMember("ItemNew") {
-			if c.addChannel != nil {
-				c.addChannel <- service
+			if addCh != nil {
+				// Non-blocking send: the channel is buffered (see AvahiProvider.Start).
+				// Dropping a signal here is far safer than blocking handleSignals while
+				// it no longer holds c.mutex, which would create a goroutine leak.
+				select {
+				case addCh <- service:
+				default:
+				}
 			}
 		} else {
-			if c.removeChannel != nil {
-				c.removeChannel <- service
+			if removeCh != nil {
+				select {
+				case removeCh <- service:
+				default:
+				}
 			}
 		}
 	}
