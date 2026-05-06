@@ -37,8 +37,19 @@ func ServerNew() ServerInterface {
 var _ ServerInterface = (*Server)(nil)
 
 func (c *Server) Setup(eventCB EventCB) error {
-	conn, err := dbus.SystemBus()
+	// Use SystemBusPrivate to get an independent D-Bus connection per Server instance.
+	// SystemBus() returns a process-wide shared connection; closing it in one Server's
+	// Shutdown() would break all other Servers in the same process.
+	conn, err := dbus.SystemBusPrivate()
 	if err != nil {
+		return err
+	}
+	if err = conn.Auth(nil); err != nil {
+		conn.Close()
+		return err
+	}
+	if err = conn.Hello(); err != nil {
+		conn.Close()
 		return err
 	}
 
