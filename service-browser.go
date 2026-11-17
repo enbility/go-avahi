@@ -11,8 +11,18 @@ import (
 type ServiceBrowser struct {
 	object        dbus.BusObject
 	mu            sync.Mutex
+	freeOnce      sync.Once
 	addChannel    chan Service
 	removeChannel chan Service
+	wake          chan struct{}
+	stop          chan struct{}
+	stopped       chan struct{}
+	pending       []serviceBrowserEvent
+}
+
+type serviceBrowserEvent struct {
+	service Service
+	channel chan Service
 }
 
 // ServiceBrowserNew creates a new browser for mDNS records
@@ -22,6 +32,10 @@ func ServiceBrowserNew(addChan, removeChan chan Service, conn *dbus.Conn, path d
 	c.object = conn.Object("org.freedesktop.Avahi", path)
 	c.addChannel = addChan
 	c.removeChannel = removeChan
+	c.wake = make(chan struct{}, 1)
+	c.stop = make(chan struct{})
+	c.stopped = make(chan struct{})
+	go c.dispatchPending()
 
 	return c, nil
 }
@@ -33,13 +47,16 @@ func (c *ServiceBrowser) interfaceForMember(method string) string {
 }
 
 func (c *ServiceBrowser) Free() {
-	// Nil channels before calling D-Bus Free so any concurrent DispatchSignal
-	// (dispatched after the server snapshot) sees nil and skips the send.
-	c.mu.Lock()
-	c.addChannel = nil
-	c.removeChannel = nil
-	c.mu.Unlock()
-	c.object.Call(c.interfaceForMember("Free"), 0)
+	c.freeOnce.Do(func() {
+		c.mu.Lock()
+		close(c.stop)
+		c.addChannel = nil
+		c.removeChannel = nil
+		c.pending = nil
+		c.mu.Unlock()
+		<-c.stopped
+		c.object.Call(c.interfaceForMember("Free"), 0)
+	})
 }
 
 func (c *ServiceBrowser) GetObjectPath() dbus.ObjectPath {
@@ -54,31 +71,55 @@ func (c *ServiceBrowser) DispatchSignal(signal *dbus.Signal) error {
 			return err
 		}
 
-		// Read channel pointers under mu so we see any nil written by Free().
 		c.mu.Lock()
-		addCh := c.addChannel
-		removeCh := c.removeChannel
-		c.mu.Unlock()
+		defer c.mu.Unlock()
 
 		if signal.Name == c.interfaceForMember("ItemNew") {
-			if addCh != nil {
-				// Non-blocking send: the channel is buffered (see AvahiProvider.Start).
-				// Dropping a signal here is far safer than blocking handleSignals while
-				// it no longer holds c.mutex, which would create a goroutine leak.
-				select {
-				case addCh <- service:
-				default:
-				}
+			if c.addChannel != nil {
+				c.pending = append(c.pending, serviceBrowserEvent{service: service, channel: c.addChannel})
 			}
 		} else {
-			if removeCh != nil {
-				select {
-				case removeCh <- service:
-				default:
-				}
+			if c.removeChannel != nil {
+				c.pending = append(c.pending, serviceBrowserEvent{service: service, channel: c.removeChannel})
 			}
+		}
+		select {
+		case c.wake <- struct{}{}:
+		default:
 		}
 	}
 
 	return nil
+}
+
+func (c *ServiceBrowser) dispatchPending() {
+	defer close(c.stopped)
+
+	for {
+		c.mu.Lock()
+		if len(c.pending) == 0 {
+			c.mu.Unlock()
+			select {
+			case <-c.stop:
+				return
+			case <-c.wake:
+			}
+			continue
+		}
+		event := c.pending[0]
+		c.pending[0] = serviceBrowserEvent{}
+		c.pending = c.pending[1:]
+		if len(c.pending) == 0 {
+			c.pending = nil
+		}
+		c.mu.Unlock()
+
+		if event.channel != nil {
+			select {
+			case <-c.stop:
+				return
+			case event.channel <- event.service:
+			}
+		}
+	}
 }
